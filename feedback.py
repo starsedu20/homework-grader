@@ -3,6 +3,7 @@ import google.generativeai as genai
 import os
 from fpdf import FPDF
 from datetime import date
+from io import BytesIO
 
 # ==========================================
 # 1. Page & API Configuration
@@ -81,13 +82,29 @@ st.write("Generate high-quality PDF reports for your students instantly.")
 
 with st.sidebar:
     st.header("📋 Report Details")
-    teacher_name = st.text_input("Teacher Name", placeholder="e.g., Rupert")
-    student_name = st.text_input("Student Name", placeholder="e.g., Cookie")
+    teacher_name = st.text_input("Teacher Name")
+    student_name = st.text_input("Student Name")
     
     st.write("---")
     st.header("📂 Upload Work")
-    homework_file = st.file_uploader("Upload Student Work (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
-    mark_scheme_file = st.file_uploader("Upload Mark Scheme (Optional)", type=["pdf", "png", "jpg", "jpeg"])
+    homework_file = st.file_uploader("Upload Student Work (PDF/Image/Word)", type=["pdf", "png", "jpg", "jpeg", "docx", "doc"])
+    mark_scheme_file = st.file_uploader("Upload Mark Scheme (Optional)", type=["pdf", "png", "jpg", "jpeg", "docx", "doc"])
+
+def build_payload_part(uploaded_file, label):
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".docx") or filename.endswith(".doc"):
+        from docx import Document
+        doc = Document(BytesIO(uploaded_file.getvalue()))
+        lines = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                lines.append(para.text)
+        for table in doc.tables:
+            for row in table.rows:
+                lines.append("\t".join(cell.text for cell in row.cells))
+        return f"\n[{label}]\n" + "\n".join(lines)
+    else:
+        return {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
 
 if homework_file:
     st.info(f"File '{homework_file.name}' ready for analysis.")
@@ -118,9 +135,9 @@ if homework_file:
                 Language: English only.
                 """
                 
-                def prep(f): return {"mime_type": f.type, "data": f.getvalue()}
-                payload = [prompt, prep(homework_file)]
-                if mark_scheme_file: payload.append(prep(mark_scheme_file))
+                payload = [prompt, build_payload_part(homework_file, "Student Work")]
+                if mark_scheme_file:
+                    payload.append(build_payload_part(mark_scheme_file, "Mark Scheme"))
                 
                 try:
                     response = model.generate_content(payload)
@@ -142,7 +159,7 @@ if homework_file:
                 except Exception as e:
                     st.error(f"Error during report generation: {e}")
 else:
-    st.info("Upload a student's chemistry or biology work to begin.")
+    st.info("Upload a student's homework to begin.")
 
 st.markdown("---")
 st.caption(f"System Date: {date.today().strftime('%Y-%m-%d')} | Powered by Gemini 1.5 Pro")
