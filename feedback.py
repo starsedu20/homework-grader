@@ -80,10 +80,15 @@ def create_word_doc(text, student_name, teacher_name):
 
     left_cell = hdr_table.cell(0, 0)
     lp = left_cell.paragraphs[0]
-    lr = lp.add_run("PLACE\nLOGO")
-    lr.font.size = Pt(9)
-    lr.font.color.rgb = ORANGE
     lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+    if os.path.exists(logo_path):
+        lr = lp.add_run()
+        lr.add_picture(logo_path, height=Cm(1.2))
+    else:
+        lr = lp.add_run("PLACE LOGO")
+        lr.font.size = Pt(9)
+        lr.font.color.rgb = ORANGE
 
     right_cell = hdr_table.cell(0, 1)
     rp = right_cell.paragraphs[0]
