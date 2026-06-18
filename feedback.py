@@ -74,21 +74,22 @@ def create_word_doc(text, student_name, teacher_name):
         section.left_margin   = Cm(2.5)
         section.right_margin  = Cm(2.5)
 
-    # --- Branding header ---
+    # --- Branding header: logo left, brand text right ---
     hdr_table = doc.add_table(rows=1, cols=2)
     hdr_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
     left_cell = hdr_table.cell(0, 0)
     lp = left_cell.paragraphs[0]
-    lr = lp.add_run("★  StarsEdu Online Tuition")
-    lr.bold = True
-    lr.font.size = Pt(12)
+    lr = lp.add_run("PLACE\nLOGO")
+    lr.font.size = Pt(9)
     lr.font.color.rgb = ORANGE
     lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     right_cell = hdr_table.cell(0, 1)
     rp = right_cell.paragraphs[0]
-    rr = rp.add_run("PLACE\nLOGO")
-    rr.font.size = Pt(9)
+    rr = rp.add_run("StarsEdu Online Tuition")
+    rr.bold = True
+    rr.font.size = Pt(12)
     rr.font.color.rgb = ORANGE
     rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
@@ -119,8 +120,6 @@ def create_word_doc(text, student_name, teacher_name):
     for col_idx, (lbl, val) in enumerate(zip(labels, values)):
         lc = info_table.cell(0, col_idx)
         vc = info_table.cell(1, col_idx)
-        _set_cell_bg(lc, "F5F0E8")
-        _set_cell_bg(vc, "F5F0E8")
         lp2 = lc.paragraphs[0]
         lp2.alignment = WD_ALIGN_PARAGRAPH.CENTER
         lr2 = lp2.add_run(lbl)
@@ -136,10 +135,25 @@ def create_word_doc(text, student_name, teacher_name):
     doc.add_paragraph()
 
     # --- Body: render AI text with basic markdown support ---
-    for line in text.strip().split("\n"):
+    # Collapse consecutive blank lines and skip the AI-generated report title heading
+    lines = text.strip().split("\n")
+    heading_counter = 0
+    first_heading_skipped = False
+    prev_blank = False
+
+    for line in lines:
         stripped = line.strip()
+
+        # Collapse consecutive blank lines
         if not stripped:
-            doc.add_paragraph()
+            if not prev_blank:
+                doc.add_paragraph()
+            prev_blank = True
+            continue
+        prev_blank = False
+
+        # Skip "---" horizontal rules that AI sometimes outputs
+        if re.match(r"^-{3,}$", stripped):
             continue
 
         is_bullet = stripped.startswith(("• ", "- ", "* "))
@@ -147,6 +161,11 @@ def create_word_doc(text, student_name, teacher_name):
 
         if is_heading:
             heading_text = re.sub(r"^#+\s*", "", stripped)
+            # Skip the first heading (AI report title line)
+            if not first_heading_skipped:
+                first_heading_skipped = True
+                continue
+            heading_counter += 1
             para = doc.add_paragraph()
             pPr = para._p.get_or_add_pPr()
             pBdr = OxmlElement("w:pBdr")
@@ -156,7 +175,7 @@ def create_word_doc(text, student_name, teacher_name):
             bottom.set(qn("w:color"), "CCCCCC")
             pBdr.append(bottom)
             pPr.append(pBdr)
-            run = para.add_run(heading_text)
+            run = para.add_run(f"{heading_counter}. {heading_text}")
             run.bold = True
             run.font.size = Pt(13)
             run.font.color.rgb = NAVY
