@@ -6,7 +6,7 @@ from io import BytesIO
 from docx import Document
 from docx.shared import Pt, RGBColor, Inches, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 import re
@@ -50,23 +50,11 @@ def get_available_model():
 model = get_available_model()
 
 # ==========================================
-# 3. Word Document Helpers
+# 3. Word Document Generation
 # ==========================================
 NAVY   = RGBColor(0x1C, 0x2B, 0x4B)
 ORANGE = RGBColor(0xC8, 0x5A, 0x1A)
-BEIGE  = "F5F0E8"
-WHITE  = "FFFFFF"
-DARK   = "1C2B4B"
-LIGHT_GREEN = "D4EDDA"
-LIGHT_BLUE  = "D0E8F5"
-LIGHT_AMBER = "FFF3CD"
-
-RATING_COLORS = {
-    "exceeding": LIGHT_BLUE,
-    "achieving": LIGHT_GREEN,
-    "working towards": LIGHT_AMBER,
-    "below": "FADADD",
-}
+GREY   = RGBColor(0x99, 0x99, 0x99)
 
 def _set_cell_bg(cell, hex_color):
     tc = cell._tc
@@ -77,252 +65,141 @@ def _set_cell_bg(cell, hex_color):
     shd.set(qn("w:fill"), hex_color)
     tcPr.append(shd)
 
-def _set_cell_border_bottom(cell, hex_color="CCCCCC", sz="4"):
-    tc = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    tcBorders = OxmlElement("w:tcBorders")
-    bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), sz)
-    bottom.set(qn("w:color"), hex_color)
-    tcBorders.append(bottom)
-    tcPr.append(tcBorders)
-
-def _para_border_bottom(para, hex_color="C85A1A", sz="12"):
-    pPr = para._p.get_or_add_pPr()
-    pBdr = OxmlElement("w:pBdr")
-    bottom = OxmlElement("w:bottom")
-    bottom.set(qn("w:val"), "single")
-    bottom.set(qn("w:sz"), sz)
-    bottom.set(qn("w:color"), hex_color)
-    pBdr.append(bottom)
-    pPr.append(pBdr)
-
-def _rating_color(rating_text):
-    lower = rating_text.lower()
-    for key, color in RATING_COLORS.items():
-        if key in lower:
-            return color
-    return "EEEEEE"
-
-def create_word_doc(sections, perf_table_rows, student_name, teacher_name, subject):
+def create_word_doc(text, student_name, teacher_name):
     doc = Document()
 
-    # Page margins
     for section in doc.sections:
         section.top_margin    = Cm(2)
         section.bottom_margin = Cm(2)
         section.left_margin   = Cm(2.5)
         section.right_margin  = Cm(2.5)
 
-    # --- Header band: branding left, logo placeholder right ---
+    # --- Branding header ---
     hdr_table = doc.add_table(rows=1, cols=2)
     hdr_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    hdr_table.columns[0].width = Inches(4.5)
-    hdr_table.columns[1].width = Inches(1.8)
-
     left_cell = hdr_table.cell(0, 0)
-    left_para = left_cell.paragraphs[0]
-    run = left_para.add_run("★  StarsEdu Online Tuition")
-    run.bold = True
-    run.font.size = Pt(13)
-    run.font.color.rgb = ORANGE
-    left_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    lp = left_cell.paragraphs[0]
+    lr = lp.add_run("★  StarsEdu Online Tuition")
+    lr.bold = True
+    lr.font.size = Pt(12)
+    lr.font.color.rgb = ORANGE
+    lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
     right_cell = hdr_table.cell(0, 1)
-    right_para = right_cell.paragraphs[0]
-    run2 = right_para.add_run("PLACE\nLOGO")
-    run2.font.size = Pt(9)
-    run2.font.color.rgb = ORANGE
-    right_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    rp = right_cell.paragraphs[0]
+    rr = rp.add_run("PLACE\nLOGO")
+    rr.font.size = Pt(9)
+    rr.font.color.rgb = ORANGE
+    rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
 
     doc.add_paragraph()
 
     # --- Title ---
     title_para = doc.add_paragraph()
     title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title_run = title_para.add_run("Homework Feedback")
-    title_run.bold = True
-    title_run.font.size = Pt(26)
-    title_run.font.color.rgb = NAVY
+    tr = title_para.add_run("Homework Feedback")
+    tr.bold = True
+    tr.font.size = Pt(24)
+    tr.font.color.rgb = NAVY
 
-    # Orange decorative rule under title
     rule_para = doc.add_paragraph()
     rule_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    rule_run = rule_para.add_run("─────")
-    rule_run.font.color.rgb = ORANGE
-    rule_run.font.size = Pt(14)
+    rr2 = rule_para.add_run("─────")
+    rr2.font.color.rgb = ORANGE
+    rr2.font.size = Pt(14)
 
     doc.add_paragraph()
 
-    # --- Info band table ---
-    today_str = date.today().strftime("%B %Y")
-    info_table = doc.add_table(rows=2, cols=4)
+    # --- Info band ---
+    today_str = date.today().strftime("%B %d, %Y")
+    info_table = doc.add_table(rows=2, cols=3)
     info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    labels = ["STUDENT NAME", "COURSE SUBJECT", "ASSIGNED TUTOR", "REPORTING PERIOD"]
-    values = [student_name, subject, teacher_name, today_str]
-
+    labels = ["STUDENT NAME", "ASSIGNED TUTOR", "DATE"]
+    values = [student_name, teacher_name, today_str]
     for col_idx, (lbl, val) in enumerate(zip(labels, values)):
-        label_cell = info_table.cell(0, col_idx)
-        value_cell = info_table.cell(1, col_idx)
-
-        _set_cell_bg(label_cell, BEIGE)
-        _set_cell_bg(value_cell, BEIGE)
-
-        lp = label_cell.paragraphs[0]
-        lp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        lr = lp.add_run(lbl)
-        lr.font.size = Pt(7.5)
-        lr.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
-
-        vp = value_cell.paragraphs[0]
+        lc = info_table.cell(0, col_idx)
+        vc = info_table.cell(1, col_idx)
+        _set_cell_bg(lc, "F5F0E8")
+        _set_cell_bg(vc, "F5F0E8")
+        lp2 = lc.paragraphs[0]
+        lp2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        lr2 = lp2.add_run(lbl)
+        lr2.font.size = Pt(7.5)
+        lr2.font.color.rgb = GREY
+        vp = vc.paragraphs[0]
         vp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        vr = vp.add_run(val)
-        vr.bold = True
-        vr.font.size = Pt(12)
-        vr.font.color.rgb = NAVY
+        vr2 = vp.add_run(val)
+        vr2.bold = True
+        vr2.font.size = Pt(12)
+        vr2.font.color.rgb = NAVY
 
     doc.add_paragraph()
 
-    # --- Performance summary table (if AI provided rows) ---
-    if perf_table_rows:
-        section_heading = doc.add_paragraph()
-        _para_border_bottom(section_heading, hex_color="CCCCCC", sz="4")
-        hr = section_heading.add_run("Academic Performance Summary")
-        hr.bold = True
-        hr.font.size = Pt(14)
-        hr.font.color.rgb = NAVY
+    # --- Body: render AI text with basic markdown support ---
+    for line in text.strip().split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            doc.add_paragraph()
+            continue
 
-        doc.add_paragraph()
+        is_bullet = stripped.startswith(("• ", "- ", "* "))
+        is_heading = stripped.startswith("#")
 
-        perf_table = doc.add_table(rows=1 + len(perf_table_rows), cols=2)
-        perf_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-
-        # Header row
-        hrow = perf_table.rows[0]
-        for cell, txt in zip(hrow.cells, ["EVALUATION DOMAIN", "CURRENT STANDING"]):
-            _set_cell_bg(cell, DARK)
-            p = cell.paragraphs[0]
-            r = p.add_run(txt)
-            r.bold = True
-            r.font.size = Pt(9)
-            r.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
-
-        for row_idx, (domain, rating) in enumerate(perf_table_rows):
-            row = perf_table.rows[row_idx + 1]
-            # Domain cell
-            _set_cell_border_bottom(row.cells[0])
-            dp = row.cells[0].paragraphs[0]
-            dr = dp.add_run(domain)
-            dr.bold = True
-            dr.font.size = Pt(10)
-            dr.font.color.rgb = NAVY
-            # Rating cell
-            _set_cell_border_bottom(row.cells[1])
-            bg = _rating_color(rating)
-            _set_cell_bg(row.cells[1], bg)
-            rp = row.cells[1].paragraphs[0]
-            rp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            rr = rp.add_run(rating.upper())
-            rr.bold = True
-            rr.font.size = Pt(9)
-            rr.font.color.rgb = NAVY
-
-        doc.add_paragraph()
-
-    # --- Narrative sections ---
-    for sec_num, (sec_title, sec_body) in enumerate(sections, start=1):
-        # Section heading with bottom border
-        heading_para = doc.add_paragraph()
-        _para_border_bottom(heading_para, hex_color="CCCCCC", sz="4")
-        heading_run = heading_para.add_run(f"{sec_num}. {sec_title}")
-        heading_run.bold = True
-        heading_run.font.size = Pt(14)
-        heading_run.font.color.rgb = NAVY
-
-        doc.add_paragraph()
-
-        # Body — support **bold** inline markup and bullet lines starting with "•" or "-"
-        for line in sec_body.strip().split("\n"):
-            line = line.strip()
-            if not line:
-                doc.add_paragraph()
-                continue
-
-            is_bullet = line.startswith("•") or line.startswith("-") or line.startswith("*")
+        if is_heading:
+            heading_text = re.sub(r"^#+\s*", "", stripped)
             para = doc.add_paragraph()
-            para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-            if is_bullet:
-                para.style = doc.styles["List Bullet"]
-                line = re.sub(r"^[•\-\*]\s*", "", line)
+            pPr = para._p.get_or_add_pPr()
+            pBdr = OxmlElement("w:pBdr")
+            bottom = OxmlElement("w:bottom")
+            bottom.set(qn("w:val"), "single")
+            bottom.set(qn("w:sz"), "4")
+            bottom.set(qn("w:color"), "CCCCCC")
+            pBdr.append(bottom)
+            pPr.append(pBdr)
+            run = para.add_run(heading_text)
+            run.bold = True
+            run.font.size = Pt(13)
+            run.font.color.rgb = NAVY
+            continue
 
-            # Split on **bold** markers
-            parts = re.split(r"(\*\*[^*]+\*\*)", line)
-            for part in parts:
-                if part.startswith("**") and part.endswith("**"):
-                    r = para.add_run(part[2:-2])
-                    r.bold = True
-                    r.font.size = Pt(11)
-                    r.font.color.rgb = NAVY
-                else:
-                    r = para.add_run(part)
-                    r.font.size = Pt(11)
+        para = doc.add_paragraph()
+        para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+        if is_bullet:
+            para.style = doc.styles["List Bullet"]
+            stripped = re.sub(r"^[•\-\*]\s*", "", stripped)
 
-        doc.add_paragraph()
+        parts = re.split(r"(\*\*[^*]+\*\*)", stripped)
+        for part in parts:
+            if part.startswith("**") and part.endswith("**"):
+                r = para.add_run(part[2:-2])
+                r.bold = True
+                r.font.size = Pt(11)
+            else:
+                r = para.add_run(part)
+                r.font.size = Pt(11)
 
     # --- Footer ---
+    doc.add_paragraph()
     footer_para = doc.add_paragraph()
-    _para_border_bottom(footer_para, hex_color="CCCCCC", sz="4")
-    footer_run = footer_para.add_run(
-        f"STARS_EDU // Academic Reporting System{' ' * 60}Page 1"
-    )
-    footer_run.font.size = Pt(8)
-    footer_run.font.color.rgb = RGBColor(0x99, 0x99, 0x99)
+    pPr = footer_para._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    top = OxmlElement("w:top")
+    top.set(qn("w:val"), "single")
+    top.set(qn("w:sz"), "4")
+    top.set(qn("w:color"), "CCCCCC")
+    pBdr.append(top)
+    pPr.append(pBdr)
+    fr = footer_para.add_run(f"STARS_EDU // Academic Reporting System")
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = GREY
 
     buf = BytesIO()
     doc.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
-
 # ==========================================
-# 4. Parse AI output into sections + perf table
-# ==========================================
-def parse_ai_output(text):
-    perf_rows = []
-    sections = []
-
-    # Extract performance table block
-    table_match = re.search(
-        r"===PERFORMANCE_TABLE===\s*(.*?)\s*===END_TABLE===",
-        text, re.DOTALL
-    )
-    if table_match:
-        table_text = table_match.group(1)
-        text = text[:table_match.start()] + text[table_match.end():]
-        for line in table_text.strip().split("\n"):
-            if "|" in line:
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) >= 2 and parts[0].lower() not in ("domain", "evaluation domain", ""):
-                    perf_rows.append((parts[0], parts[1]))
-
-    # Extract sections by ===SECTION: Title=== delimiter
-    section_pattern = re.split(r"===SECTION:\s*(.*?)===", text)
-    if len(section_pattern) > 1:
-        for i in range(1, len(section_pattern), 2):
-            title = section_pattern[i].strip()
-            body  = section_pattern[i + 1].strip() if i + 1 < len(section_pattern) else ""
-            if title and body:
-                sections.append((title, body))
-    else:
-        # Fallback: treat whole text as a single section
-        sections.append(("Feedback", text.strip()))
-
-    return perf_rows, sections
-
-
-# ==========================================
-# 5. Main Application Interface
+# 4. Main Application Interface
 # ==========================================
 st.title("🎓 Professional Feedback Portal")
 st.write("Generate high-quality Word reports for your students instantly.")
@@ -331,7 +208,6 @@ with st.sidebar:
     st.header("📋 Report Details")
     teacher_name = st.text_input("Teacher Name")
     student_name = st.text_input("Student Name")
-    subject      = st.text_input("Subject")
 
     st.write("---")
     st.header("📂 Upload Work")
@@ -365,62 +241,33 @@ if homework_file:
             st.error("AI model is not responding. Check your API key.")
         else:
             with st.spinner(f"Analysing {student_name}'s work..."):
-                subject_line = f"Subject: {subject}" if subject else ""
                 prompt = f"""
-You are a senior international tutor named {teacher_name}.
-Analyse the student work provided and produce a structured homework feedback report for {student_name}.
-{subject_line}
+                You are a senior international tutor named {teacher_name}.
+                Write a personalized study report to your student, {student_name}.
 
-IMPORTANT FORMATTING RULES — follow exactly:
-- Do NOT write the student name, date, tutor name, or any header at the top. Those will be added automatically.
-- Structure your output using the delimiters below — no other section markers.
-- Use **bold** for key terms or sub-headings within body text.
-- Use bullet points (starting with •) for lists.
+                Context:
+                - Use a professional yet encouraging first-person tone ("I observed", "You should focus on").
+                - Today's date is {date.today().strftime("%B %d, %Y")}.
 
-Step 1 — Output a performance table block like this (keep the exact delimiters, list 3-5 skill domains relevant to the work):
-===PERFORMANCE_TABLE===
-Domain | Rating
-Reading Comprehension | Achieving Expectations
-Written Expression | Exceeding Expectations
-===END_TABLE===
+                Requirements:
+                1. Greeting: Address {student_name} directly.
+                2. Executive Summary: Brief overview of performance.
+                3. Detailed Marking: List questions with [Correct] or [Incorrect]. Highlight conceptual errors (e.g., Ne vs Ni symbols).
+                4. Key Gaps: Specific knowledge areas needing attention.
+                5. Next Steps: Foundation (to consolidate) and Extension (to challenge).
 
-Ratings must be one of: Exceeding Expectations | Achieving Expectations | Working Towards Expectations | Below Expectations
+                Language: English only.
+                """
 
-Step 2 — Output narrative sections using this pattern (choose section titles appropriate to the subject):
-===SECTION: Executive Summary & Approach to Learning===
-Two or three paragraph overview of overall performance, attitude, and the key focus area for development.
-
-===SECTION: Detailed Marking & Question Review===
-Go through each question or task. For each: state what was attempted, what was correct, what was incorrect, and the conceptual gap if any.
-
-===SECTION: Key Knowledge Gaps===
-Specific topics or skills the student needs to strengthen, with brief explanation of why.
-
-===SECTION: Strategic Objectives for the Upcoming Sessions===
-• **Objective 1 name:** explanation
-• **Objective 2 name:** explanation
-• **Objective 3 name:** explanation
-
-===SECTION: Actionable Guidance for Home Study===
-• **Tip 1 name:** explanation
-• **Tip 2 name:** explanation
-• **Tip 3 name:** explanation
-
-Language: English only. Be specific, encouraging, and professional.
-"""
                 payload = [prompt, build_payload_part(homework_file, "Student Work")]
                 if mark_scheme_file:
                     payload.append(build_payload_part(mark_scheme_file, "Mark Scheme"))
 
                 try:
                     response = model.generate_content(payload)
-                    raw_text = response.text
+                    report_content = response.text
 
-                    perf_rows, sections = parse_ai_output(raw_text)
-                    word_bytes = create_word_doc(
-                        sections, perf_rows, student_name, teacher_name,
-                        subject if subject else "General"
-                    )
+                    word_bytes = create_word_doc(report_content, student_name, teacher_name)
 
                     st.success(f"🎉 Report for {student_name} is ready!")
                     st.download_button(
