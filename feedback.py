@@ -4,8 +4,11 @@ import os
 import io
 import re
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, Cm, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from datetime import date
 
 # ==========================================
@@ -49,6 +52,9 @@ model = get_available_model()
 # ==========================================
 # 3. Word Document Generation
 # ==========================================
+NAVY   = RGBColor(0x1C, 0x2B, 0x4B)
+ORANGE = RGBColor(0xC8, 0x5A, 0x1A)
+GREY   = RGBColor(0x99, 0x99, 0x99)
 
 # Canonical section names — the code will auto-number these 1–6
 SECTIONS = [
@@ -60,19 +66,18 @@ SECTIONS = [
     "Extension (To Challenge)",
 ]
 
-# Lines containing any of these strings are silently dropped
+# Lines containing any of these patterns are silently dropped
 REMOVE_PATTERNS = [
     r"STARS_EDU",
     r"Academic Reporting System",
     r"Senior International Tutor",
-    # Header block the AI sometimes adds
     r"^Study Report",
     r"^Student\s*:",
     r"^Tutor\s*:",
     r"^Date\s*:",
     r"^To\s*:",
     r"^From\s*:",
-    r"^Homework Feedback$",   # title will be added by the code itself
+    r"^Homework Feedback$",
 ]
 
 def should_remove(line: str) -> bool:
@@ -83,13 +88,10 @@ def should_remove(line: str) -> bool:
 
 def match_section(line: str):
     """Return (section_index, canonical_label) if line is a section header, else None."""
-    # Strip leading numbers like "1. " or "1) " that the AI might add
     clean = re.sub(r'^\d+[\.\)]\s*', '', line.strip()).rstrip(':').strip().lower()
     for i, name in enumerate(SECTIONS):
-        # Exact match (case-insensitive)
         if clean == name.lower():
             return i, name
-        # Prefix match — handles variants like "Key Gaps for Attention"
         if clean.startswith(name.lower()):
             return i, name
     return None
@@ -100,21 +102,55 @@ def is_numbered_item(line: str) -> bool:
 def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
     doc = Document()
 
-    # Page margins
     for section in doc.sections:
-        section.top_margin    = Inches(1)
-        section.bottom_margin = Inches(1)
-        section.left_margin   = Inches(1.2)
-        section.right_margin  = Inches(1.2)
+        section.top_margin    = Cm(2.5)
+        section.bottom_margin = Cm(2.5)
+        section.left_margin   = Cm(3)
+        section.right_margin  = Cm(3)
 
-    # Title
-    title_p = doc.add_paragraph()
-    run = title_p.add_run("Homework Feedback")
-    run.bold = True
-    run.font.size = Pt(22)
-    title_p.paragraph_format.space_after = Pt(14)
+    # --- Branding header: logo left, brand text right ---
+    hdr_table = doc.add_table(rows=1, cols=2)
+    hdr_table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # Split AI text at "Best regards" so we control the sign-off
+    left_cell = hdr_table.cell(0, 0)
+    lp = left_cell.paragraphs[0]
+    lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+    if os.path.exists(logo_path):
+        lp.add_run().add_picture(logo_path, height=Cm(1.2))
+    else:
+        lr = lp.add_run("PLACE LOGO")
+        lr.font.size = Pt(9)
+        lr.font.color.rgb = ORANGE
+
+    right_cell = hdr_table.cell(0, 1)
+    rp = right_cell.paragraphs[0]
+    rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    rr = rp.add_run("StarsEdu Online Tuition")
+    rr.bold = True
+    rr.font.size = Pt(12)
+    rr.font.color.rgb = ORANGE
+
+    doc.add_paragraph()
+
+    # --- Title ---
+    title_para = doc.add_paragraph()
+    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title_para.paragraph_format.space_after = Pt(4)
+    tr = title_para.add_run("Homework Feedback")
+    tr.bold = True
+    tr.font.size = Pt(24)
+    tr.font.color.rgb = NAVY
+
+    rule_para = doc.add_paragraph()
+    rule_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    rule_para.paragraph_format.space_after = Pt(14)
+    rr2 = rule_para.add_run("─────")
+    rr2.font.color.rgb = ORANGE
+    rr2.font.size = Pt(14)
+
+    # --- Body ---
+    # Split at "Best regards" so we control the sign-off
     body_text, _, _ = text.partition("Best regards")
 
     lines = body_text.split("\n")
@@ -123,7 +159,6 @@ def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
     for raw in lines:
         line = raw.strip()
 
-        # Drop unwanted lines
         if should_remove(line):
             continue
 
@@ -148,23 +183,26 @@ def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
             run.font.size = Pt(12)
             continue
 
-        # Numbered sub-item  e.g. "1). Grammar…"
+        # Numbered sub-item e.g. "1). Grammar…"
         if is_numbered_item(line):
-            body = re.sub(r'^\d+[\)\.]\s*', '', line)
             p = doc.add_paragraph()
-            p.paragraph_format.left_indent = Inches(0)
             p.paragraph_format.space_after = Pt(4)
-            # Write the number manually so formatting is consistent
             num_match = re.match(r'^(\d+[\)\.])(.+)', line)
             if num_match:
-                num_part  = num_match.group(1)
-                body_part = num_match.group(2).strip()
-                r1 = p.add_run(num_part + "  ")
+                r1 = p.add_run(num_match.group(1) + "  ")
                 r1.font.size = Pt(11)
-                r2 = p.add_run(body_part)
+                r2 = p.add_run(num_match.group(2).strip())
                 r2.font.size = Pt(11)
             else:
                 p.add_run(line).font.size = Pt(11)
+            continue
+
+        # Bullet line
+        if re.match(r'^[•\-\*]\s+', line):
+            body = re.sub(r'^[•\-\*]\s+', '', line)
+            p = doc.add_paragraph(style="List Bullet")
+            p.add_run(body).font.size = Pt(11)
+            p.paragraph_format.space_after = Pt(3)
             continue
 
         # Normal paragraph
@@ -173,7 +211,7 @@ def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
             r.font.size = Pt(11)
         p.paragraph_format.space_after = Pt(4)
 
-    # Controlled sign-off
+    # --- Controlled sign-off ---
     doc.add_paragraph()
     p = doc.add_paragraph()
     p.add_run("Best regards,").font.size = Pt(11)
@@ -184,26 +222,67 @@ def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
     r.font.size = Pt(11)
     p2.paragraph_format.space_before = Pt(6)
 
+    # --- Footer ---
+    doc.add_paragraph()
+    footer_para = doc.add_paragraph()
+    pPr = footer_para._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    top_el = OxmlElement("w:top")
+    top_el.set(qn("w:val"), "single")
+    top_el.set(qn("w:sz"), "4")
+    top_el.set(qn("w:color"), "CCCCCC")
+    pBdr.append(top_el)
+    pPr.append(pBdr)
+    fr = footer_para.add_run("STARS_EDU // Academic Reporting System")
+    fr.font.size = Pt(8)
+    fr.font.color.rgb = GREY
+
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
     return buf.getvalue()
 
+
 # ==========================================
-# 4. Main Application Interface
+# 4. Payload helper (PDF/image/Word)
+# ==========================================
+def build_payload_part(uploaded_file, label):
+    filename = uploaded_file.name.lower()
+    if filename.endswith(".docx") or filename.endswith(".doc"):
+        doc = Document(io.BytesIO(uploaded_file.getvalue()))
+        lines = []
+        for para in doc.paragraphs:
+            if para.text.strip():
+                lines.append(para.text)
+        for table in doc.tables:
+            for row in table.rows:
+                lines.append("\t".join(cell.text for cell in row.cells))
+        return f"\n[{label}]\n" + "\n".join(lines)
+    else:
+        return {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
+
+
+# ==========================================
+# 5. Main Application Interface
 # ==========================================
 st.title("🎓 Professional Feedback Portal")
 st.write("Generate high-quality feedback reports for your students instantly.")
 
 with st.sidebar:
     st.header("📋 Report Details")
-    teacher_name = st.text_input("Teacher Name", placeholder="e.g., Harry")
-    student_name = st.text_input("Student Name", placeholder="e.g., Nedime")
+    teacher_name = st.text_input("Teacher Name")
+    student_name = st.text_input("Student Name")
 
     st.write("---")
     st.header("📂 Upload Work")
-    homework_file    = st.file_uploader("Upload Student Work (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
-    mark_scheme_file = st.file_uploader("Upload Mark Scheme (Optional)",   type=["pdf", "png", "jpg", "jpeg"])
+    homework_file    = st.file_uploader(
+        "Upload Student Work (PDF / Image / Word)",
+        type=["pdf", "png", "jpg", "jpeg", "docx", "doc"]
+    )
+    mark_scheme_file = st.file_uploader(
+        "Upload Mark Scheme (Optional)",
+        type=["pdf", "png", "jpg", "jpeg", "docx", "doc"]
+    )
 
 if homework_file:
     st.info(f"File '{homework_file.name}' ready for analysis.")
@@ -261,16 +340,12 @@ Rules:
 - Do NOT include any title, header block, or metadata at the top.
 - Do NOT write your job title, "Senior International Tutor", "STARS_EDU", or any footer.
 - Do NOT add more than one blank line between sections.
-- Use plain numbered items 1). 2). 3). — no bullet symbols.
+- Use plain numbered items 1). 2). 3). — no bullet symbols unless listing marking points.
 - Write in English only.
 """
-
-                def prep(f):
-                    return {"mime_type": f.type, "data": f.getvalue()}
-
-                payload = [prompt, prep(homework_file)]
+                payload = [prompt, build_payload_part(homework_file, "Student Work")]
                 if mark_scheme_file:
-                    payload.append(prep(mark_scheme_file))
+                    payload.append(build_payload_part(mark_scheme_file, "Mark Scheme"))
 
                 try:
                     response = model.generate_content(payload)
@@ -296,7 +371,7 @@ Rules:
                 except Exception as e:
                     st.error(f"Error during report generation: {e}")
 else:
-    st.info("👈 Upload the student's work in the sidebar to begin.")
+    st.info("Upload a student's homework to begin.")
 
 st.markdown("---")
-st.caption(f"System Date: {date.today().strftime('%Y-%m-%d')}")
+st.caption(f"System Date: {date.today().strftime('%Y-%m-%d')} | Powered by Gemini 1.5 Pro")
