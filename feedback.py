@@ -1,15 +1,12 @@
 import streamlit as st
 import google.generativeai as genai
 import os
-from datetime import date
-from io import BytesIO
-from docx import Document
-from docx.shared import Pt, RGBColor, Inches, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml.ns import qn
-from docx.oxml import OxmlElement
+import io
 import re
+from docx import Document
+from docx.shared import Pt, Inches
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from datetime import date
 
 # ==========================================
 # 1. Page & API Configuration
@@ -52,172 +49,142 @@ model = get_available_model()
 # ==========================================
 # 3. Word Document Generation
 # ==========================================
-NAVY   = RGBColor(0x1C, 0x2B, 0x4B)
-ORANGE = RGBColor(0xC8, 0x5A, 0x1A)
-GREY   = RGBColor(0x99, 0x99, 0x99)
 
-def _set_cell_bg(cell, hex_color):
-    tc = cell._tc
-    tcPr = tc.get_or_add_tcPr()
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:val"), "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"), hex_color)
-    tcPr.append(shd)
+# Canonical section names — the code will auto-number these 1–6
+SECTIONS = [
+    "Executive Summary",
+    "Detailed Marking",
+    "Key Gaps",
+    "Next Steps",
+    "Foundation (To Consolidate)",
+    "Extension (To Challenge)",
+]
 
-def create_word_doc(text, student_name, teacher_name):
+# Lines containing any of these strings are silently dropped
+REMOVE_PATTERNS = [
+    r"STARS_EDU",
+    r"Academic Reporting System",
+    r"Senior International Tutor",
+    # Header block the AI sometimes adds
+    r"^Study Report",
+    r"^Student\s*:",
+    r"^Tutor\s*:",
+    r"^Date\s*:",
+    r"^To\s*:",
+    r"^From\s*:",
+    r"^Homework Feedback$",   # title will be added by the code itself
+]
+
+def should_remove(line: str) -> bool:
+    for pat in REMOVE_PATTERNS:
+        if re.search(pat, line.strip(), re.IGNORECASE):
+            return True
+    return False
+
+def match_section(line: str):
+    """Return (section_index, canonical_label) if line is a section header, else None."""
+    # Strip leading numbers like "1. " or "1) " that the AI might add
+    clean = re.sub(r'^\d+[\.\)]\s*', '', line.strip()).rstrip(':').strip().lower()
+    for i, name in enumerate(SECTIONS):
+        # Exact match (case-insensitive)
+        if clean == name.lower():
+            return i, name
+        # Prefix match — handles variants like "Key Gaps for Attention"
+        if clean.startswith(name.lower()):
+            return i, name
+    return None
+
+def is_numbered_item(line: str) -> bool:
+    return bool(re.match(r'^\d+[\)\.]\s+\S', line.strip()))
+
+def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
     doc = Document()
 
+    # Page margins
     for section in doc.sections:
-        section.top_margin    = Cm(2)
-        section.bottom_margin = Cm(2)
-        section.left_margin   = Cm(2.5)
-        section.right_margin  = Cm(2.5)
+        section.top_margin    = Inches(1)
+        section.bottom_margin = Inches(1)
+        section.left_margin   = Inches(1.2)
+        section.right_margin  = Inches(1.2)
 
-    # --- Branding header: logo left, brand text right ---
-    hdr_table = doc.add_table(rows=1, cols=2)
-    hdr_table.alignment = WD_TABLE_ALIGNMENT.CENTER
+    # Title
+    title_p = doc.add_paragraph()
+    run = title_p.add_run("Homework Feedback")
+    run.bold = True
+    run.font.size = Pt(22)
+    title_p.paragraph_format.space_after = Pt(14)
 
-    left_cell = hdr_table.cell(0, 0)
-    lp = left_cell.paragraphs[0]
-    lp.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
-    if os.path.exists(logo_path):
-        lr = lp.add_run()
-        lr.add_picture(logo_path, height=Cm(1.2))
-    else:
-        lr = lp.add_run("PLACE LOGO")
-        lr.font.size = Pt(9)
-        lr.font.color.rgb = ORANGE
+    # Split AI text at "Best regards" so we control the sign-off
+    body_text, _, _ = text.partition("Best regards")
 
-    right_cell = hdr_table.cell(0, 1)
-    rp = right_cell.paragraphs[0]
-    rr = rp.add_run("StarsEdu Online Tuition")
-    rr.bold = True
-    rr.font.size = Pt(12)
-    rr.font.color.rgb = ORANGE
-    rp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-
-    doc.add_paragraph()
-
-    # --- Title ---
-    title_para = doc.add_paragraph()
-    title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    tr = title_para.add_run("Homework Feedback")
-    tr.bold = True
-    tr.font.size = Pt(24)
-    tr.font.color.rgb = NAVY
-
-    rule_para = doc.add_paragraph()
-    rule_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    rr2 = rule_para.add_run("─────")
-    rr2.font.color.rgb = ORANGE
-    rr2.font.size = Pt(14)
-
-    doc.add_paragraph()
-
-    # --- Info band ---
-    today_str = date.today().strftime("%B %d, %Y")
-    info_table = doc.add_table(rows=2, cols=3)
-    info_table.alignment = WD_TABLE_ALIGNMENT.CENTER
-    labels = ["STUDENT NAME", "ASSIGNED TUTOR", "DATE"]
-    values = [student_name, teacher_name, today_str]
-    for col_idx, (lbl, val) in enumerate(zip(labels, values)):
-        lc = info_table.cell(0, col_idx)
-        vc = info_table.cell(1, col_idx)
-        lp2 = lc.paragraphs[0]
-        lp2.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        lr2 = lp2.add_run(lbl)
-        lr2.font.size = Pt(7.5)
-        lr2.font.color.rgb = GREY
-        vp = vc.paragraphs[0]
-        vp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        vr2 = vp.add_run(val)
-        vr2.bold = True
-        vr2.font.size = Pt(12)
-        vr2.font.color.rgb = NAVY
-
-    doc.add_paragraph()
-
-    # --- Body: render AI text with basic markdown support ---
-    # Collapse consecutive blank lines and skip the AI-generated report title heading
-    lines = text.strip().split("\n")
-    heading_counter = 0
-    first_heading_skipped = False
+    lines = body_text.split("\n")
     prev_blank = False
 
-    for line in lines:
-        stripped = line.strip()
+    for raw in lines:
+        line = raw.strip()
+
+        # Drop unwanted lines
+        if should_remove(line):
+            continue
 
         # Collapse consecutive blank lines
-        if not stripped:
-            if not prev_blank:
-                doc.add_paragraph()
+        if not line:
+            if prev_blank:
+                continue
             prev_blank = True
+            doc.add_paragraph().paragraph_format.space_after = Pt(0)
             continue
         prev_blank = False
 
-        # Skip "---" horizontal rules that AI sometimes outputs
-        if re.match(r"^-{3,}$", stripped):
-            continue
-
-        is_bullet = stripped.startswith(("• ", "- ", "* "))
-        is_heading = stripped.startswith("#")
-
-        if is_heading:
-            heading_text = re.sub(r"^#+\s*", "", stripped)
-            # Skip the first heading (AI report title line)
-            if not first_heading_skipped:
-                first_heading_skipped = True
-                continue
-            heading_counter += 1
-            para = doc.add_paragraph()
-            pPr = para._p.get_or_add_pPr()
-            pBdr = OxmlElement("w:pBdr")
-            bottom = OxmlElement("w:bottom")
-            bottom.set(qn("w:val"), "single")
-            bottom.set(qn("w:sz"), "4")
-            bottom.set(qn("w:color"), "CCCCCC")
-            pBdr.append(bottom)
-            pPr.append(pBdr)
-            run = para.add_run(f"{heading_counter}. {heading_text}")
+        # Section header
+        m = match_section(line)
+        if m is not None:
+            idx, name = m
+            p = doc.add_paragraph()
+            p.paragraph_format.space_before = Pt(10)
+            p.paragraph_format.space_after  = Pt(2)
+            run = p.add_run(f"{idx + 1}.  {name}:")
             run.bold = True
-            run.font.size = Pt(13)
-            run.font.color.rgb = NAVY
+            run.font.size = Pt(12)
             continue
 
-        para = doc.add_paragraph()
-        para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
-        if is_bullet:
-            para.style = doc.styles["List Bullet"]
-            stripped = re.sub(r"^[•\-\*]\s*", "", stripped)
-
-        parts = re.split(r"(\*\*[^*]+\*\*)", stripped)
-        for part in parts:
-            if part.startswith("**") and part.endswith("**"):
-                r = para.add_run(part[2:-2])
-                r.bold = True
-                r.font.size = Pt(11)
+        # Numbered sub-item  e.g. "1). Grammar…"
+        if is_numbered_item(line):
+            body = re.sub(r'^\d+[\)\.]\s*', '', line)
+            p = doc.add_paragraph()
+            p.paragraph_format.left_indent = Inches(0)
+            p.paragraph_format.space_after = Pt(4)
+            # Write the number manually so formatting is consistent
+            num_match = re.match(r'^(\d+[\)\.])(.+)', line)
+            if num_match:
+                num_part  = num_match.group(1)
+                body_part = num_match.group(2).strip()
+                r1 = p.add_run(num_part + "  ")
+                r1.font.size = Pt(11)
+                r2 = p.add_run(body_part)
+                r2.font.size = Pt(11)
             else:
-                r = para.add_run(part)
-                r.font.size = Pt(11)
+                p.add_run(line).font.size = Pt(11)
+            continue
 
-    # --- Footer ---
+        # Normal paragraph
+        p = doc.add_paragraph(line)
+        for r in p.runs:
+            r.font.size = Pt(11)
+        p.paragraph_format.space_after = Pt(4)
+
+    # Controlled sign-off
     doc.add_paragraph()
-    footer_para = doc.add_paragraph()
-    pPr = footer_para._p.get_or_add_pPr()
-    pBdr = OxmlElement("w:pBdr")
-    top = OxmlElement("w:top")
-    top.set(qn("w:val"), "single")
-    top.set(qn("w:sz"), "4")
-    top.set(qn("w:color"), "CCCCCC")
-    pBdr.append(top)
-    pPr.append(pBdr)
-    fr = footer_para.add_run(f"STARS_EDU // Academic Reporting System")
-    fr.font.size = Pt(8)
-    fr.font.color.rgb = GREY
+    p = doc.add_paragraph()
+    p.add_run("Best regards,").font.size = Pt(11)
 
-    buf = BytesIO()
+    p2 = doc.add_paragraph()
+    r = p2.add_run(teacher_name)
+    r.bold = True
+    r.font.size = Pt(11)
+    p2.paragraph_format.space_before = Pt(6)
+
+    buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
     return buf.getvalue()
@@ -226,85 +193,110 @@ def create_word_doc(text, student_name, teacher_name):
 # 4. Main Application Interface
 # ==========================================
 st.title("🎓 Professional Feedback Portal")
-st.write("Generate high-quality Word reports for your students instantly.")
+st.write("Generate high-quality feedback reports for your students instantly.")
 
 with st.sidebar:
     st.header("📋 Report Details")
-    teacher_name = st.text_input("Teacher Name")
-    student_name = st.text_input("Student Name")
+    teacher_name = st.text_input("Teacher Name", placeholder="e.g., Harry")
+    student_name = st.text_input("Student Name", placeholder="e.g., Nedime")
 
     st.write("---")
     st.header("📂 Upload Work")
-    homework_file    = st.file_uploader("Upload Student Work (PDF/Image/Word)",  type=["pdf", "png", "jpg", "jpeg", "docx", "doc"])
-    mark_scheme_file = st.file_uploader("Upload Mark Scheme (Optional)",          type=["pdf", "png", "jpg", "jpeg", "docx", "doc"])
-
-
-def build_payload_part(uploaded_file, label):
-    filename = uploaded_file.name.lower()
-    if filename.endswith(".docx") or filename.endswith(".doc"):
-        doc = Document(BytesIO(uploaded_file.getvalue()))
-        lines = []
-        for para in doc.paragraphs:
-            if para.text.strip():
-                lines.append(para.text)
-        for table in doc.tables:
-            for row in table.rows:
-                lines.append("\t".join(cell.text for cell in row.cells))
-        return f"\n[{label}]\n" + "\n".join(lines)
-    else:
-        return {"mime_type": uploaded_file.type, "data": uploaded_file.getvalue()}
-
+    homework_file    = st.file_uploader("Upload Student Work (PDF/Image)", type=["pdf", "png", "jpg", "jpeg"])
+    mark_scheme_file = st.file_uploader("Upload Mark Scheme (Optional)",   type=["pdf", "png", "jpg", "jpeg"])
 
 if homework_file:
     st.info(f"File '{homework_file.name}' ready for analysis.")
 
-    if st.button("🚀 Process & Generate Word Report", use_container_width=True):
+    if st.button("🚀 Process & Generate Feedback Report", use_container_width=True):
         if not teacher_name or not student_name:
             st.warning("⚠️ Please enter both Teacher and Student names in the sidebar.")
         elif not model:
             st.error("AI model is not responding. Check your API key.")
         else:
-            with st.spinner(f"Analysing {student_name}'s work..."):
-                prompt = f"""
-                You are a senior international tutor named {teacher_name}.
-                Write a personalized study report to your student, {student_name}.
+            with st.spinner(f"Analysing {student_name}'s work…"):
 
-                Context:
-                - Use a professional yet encouraging first-person tone ("I observed", "You should focus on").
-                - Today's date is {date.today().strftime("%B %d, %Y")}.
+                prompt = f"""You are a tutor named {teacher_name}.
+Write a personalised homework feedback report addressed to your student, {student_name}.
 
-                Requirements:
-                1. Greeting: Address {student_name} directly.
-                2. Executive Summary: Brief overview of performance.
-                3. Detailed Marking: List questions with [Correct] or [Incorrect]. Highlight conceptual errors (e.g., Ne vs Ni symbols).
-                4. Key Gaps: Specific knowledge areas needing attention.
-                5. Next Steps: Foundation (to consolidate) and Extension (to challenge).
+Tone: professional, encouraging, and direct (use "I" and "you").
+Today's date: {date.today().strftime("%B %d, %Y")}.
 
-                Language: English only.
-                """
+IMPORTANT — begin the report immediately with the greeting below.
+Do NOT add any title block, header, or metadata before the greeting.
+Do NOT write lines such as "Study Report:", "Student:", "Tutor:", "Date:", or "Homework Feedback" at the top.
 
-                payload = [prompt, build_payload_part(homework_file, "Student Work")]
+Start with:
+
+Dear {student_name},
+
+[One warm opening sentence.]
+
+Then include each of these sections in order, using EXACTLY these headings (no numbering — the formatting system will add numbers):
+
+Executive Summary:
+[2–3 sentences summarising overall performance.]
+
+Detailed Marking:
+[For each question or paragraph, give it a clear label and mark it [Correct], [Correct – Minor Error], or [Incorrect]. Explain what was right or wrong and give a specific suggestion.]
+
+Key Gaps:
+[Number each gap 1). 2). 3). Focus on the most important areas needing improvement.]
+
+Next Steps:
+[One brief sentence introducing the steps below.]
+
+Foundation (To Consolidate):
+[Number each step 1). 2). 3). Practical actions to reinforce core understanding.]
+
+Extension (To Challenge):
+[Number each step 1). 2). 3). Stretch tasks for deeper learning.]
+
+[One closing encouragement sentence addressed to {student_name} by name.]
+
+Best regards,
+{teacher_name}
+
+Rules:
+- Do NOT include any title, header block, or metadata at the top.
+- Do NOT write your job title, "Senior International Tutor", "STARS_EDU", or any footer.
+- Do NOT add more than one blank line between sections.
+- Use plain numbered items 1). 2). 3). — no bullet symbols.
+- Write in English only.
+"""
+
+                def prep(f):
+                    return {"mime_type": f.type, "data": f.getvalue()}
+
+                payload = [prompt, prep(homework_file)]
                 if mark_scheme_file:
-                    payload.append(build_payload_part(mark_scheme_file, "Mark Scheme"))
+                    payload.append(prep(mark_scheme_file))
 
                 try:
                     response = model.generate_content(payload)
-                    report_content = response.text
+                    report_text = response.text
 
-                    word_bytes = create_word_doc(report_content, student_name, teacher_name)
+                    docx_bytes = create_docx(report_text, student_name, teacher_name)
 
-                    st.success(f"🎉 Report for {student_name} is ready!")
-                    st.download_button(
-                        label="📥 Download Word Report",
-                        data=word_bytes,
-                        file_name=f"{student_name}_Feedback_{date.today()}.docx",
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True
-                    )
+                    st.success(f"🎉 Feedback report for {student_name} is ready!")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.download_button(
+                            label="📥 Download Word (.docx)",
+                            data=docx_bytes,
+                            file_name=f"{student_name}_Feedback_{date.today()}.docx",
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            use_container_width=True,
+                        )
+
+                    with st.expander("Preview report text"):
+                        st.text(report_text)
+
                 except Exception as e:
                     st.error(f"Error during report generation: {e}")
 else:
-    st.info("Upload a student's homework to begin.")
+    st.info("👈 Upload the student's work in the sidebar to begin.")
 
 st.markdown("---")
-st.caption(f"System Date: {date.today().strftime('%Y-%m-%d')} | Powered by Gemini 1.5 Pro")
+st.caption(f"System Date: {date.today().strftime('%Y-%m-%d')}")
