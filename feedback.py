@@ -222,21 +222,6 @@ def create_docx(text: str, student_name: str, teacher_name: str) -> bytes:
     r.font.size = Pt(11)
     p2.paragraph_format.space_before = Pt(6)
 
-    # --- Footer ---
-    doc.add_paragraph()
-    footer_para = doc.add_paragraph()
-    pPr = footer_para._p.get_or_add_pPr()
-    pBdr = OxmlElement("w:pBdr")
-    top_el = OxmlElement("w:top")
-    top_el.set(qn("w:val"), "single")
-    top_el.set(qn("w:sz"), "4")
-    top_el.set(qn("w:color"), "CCCCCC")
-    pBdr.append(top_el)
-    pPr.append(pBdr)
-    fr = footer_para.add_run("STARS_EDU // Academic Reporting System")
-    fr.font.size = Pt(8)
-    fr.font.color.rgb = GREY
-
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
